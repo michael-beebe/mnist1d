@@ -168,7 +168,7 @@ class ResNet1DBase(nn.Module):
         return out
 
 
-# --- Temporal ConvNet ---
+# --- FIXME: Temporal ConvNet ---
 class TCNBase(nn.Module):
 
     def __init__(self,
@@ -178,102 +178,70 @@ class TCNBase(nn.Module):
                  kernel_size=2,
                  dropout=0.2):
         super(TCNBase, self).__init__()
-        # Temporal convolutional network
-        self.tcn = TemporalConvNet(input_size, num_channels, kernel_size,
-                                   dropout)
-        # Linear layer for output
+        self.layers = nn.ModuleList()  # Store layers of the TCN
+        num_levels = len(num_channels)
+
+        for i in range(num_levels):
+            # Use input_size for the first layer, and num_channels for subsequent layers
+            in_channels = input_size if i == 0 else num_channels[i - 1]
+            out_channels = num_channels[i]
+            dilation_size = 2**i
+            self.layers.append(
+                self._build_block(in_channels, out_channels, kernel_size,
+                                  dilation_size, dropout))
+
+        # Linear layer for classification
         self.linear = nn.Linear(num_channels[-1], output_size)
-        print("Initialized TCNBase model with {} parameters".format(
-            self.count_params()))
+        print(
+            f"Initialized TCNBase model with {self.count_params()} parameters")
+
+    def _build_block(self, in_channels, out_channels, kernel_size, dilation,
+                     dropout):
+        padding = (kernel_size - 1) * dilation
+        return nn.Sequential(
+            nn.Conv1d(in_channels,
+                      out_channels,
+                      kernel_size,
+                      stride=1,
+                      padding=padding,
+                      dilation=dilation),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(out_channels,
+                      out_channels,
+                      kernel_size,
+                      stride=1,
+                      padding=padding,
+                      dilation=dilation),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            # Shortcut connection
+            nn.Conv1d(in_channels, out_channels, kernel_size=1)
+            if in_channels != out_channels else nn.Identity())
 
     def count_params(self):
-        # Count the number of parameters in the model
         return sum(p.numel() for p in self.parameters())
 
     def forward(self, x):
-        # Forward pass through the TCN
-        out = self.tcn(x)
-        out = out[:, :, -1]  # Take the last time step
+        print(f"Input shape: {x.shape}")  # Debugging info to check input shape
+        # Assuming input shape is [batch_size, input_size, sequence_length]
+        for layer in self.layers:
+            out = layer(x)
+            x = out + x  # Residual connection
+
+        # Take the last time step's output
+        out = out[:, :, -1]
+
+        # Final linear layer for classification
         out = self.linear(out)
+        print(f"Output shape: {out.shape}"
+              )  # Debugging info to check output shape
         return out
 
 
-class TemporalConvNet(nn.Module):
-
-    def __init__(self, num_inputs, num_channels, kernel_size=2, dropout=0.2):
-        super(TemporalConvNet, self).__init__()
-        layers = []
-        num_levels = len(num_channels)
-        for i in range(num_levels):
-            # Define dilation size for each layer
-            dilation_size = 2**i
-            in_channels = num_inputs if i == 0 else num_channels[i - 1]
-            out_channels = num_channels[i]
-            layers += [
-                TemporalBlock(in_channels,
-                              out_channels,
-                              kernel_size,
-                              stride=1,
-                              dilation=dilation_size,
-                              padding=(kernel_size - 1) * dilation_size,
-                              dropout=dropout)
-            ]
-
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x):
-        # Forward pass through the network
-        return self.network(x)
-
-
-class TemporalBlock(nn.Module):
-
-    def __init__(self,
-                 n_inputs,
-                 n_outputs,
-                 kernel_size,
-                 stride,
-                 dilation,
-                 padding,
-                 dropout=0.2):
-        super(TemporalBlock, self).__init__()
-        # First convolutional layer
-        self.conv1 = nn.Conv1d(n_inputs,
-                               n_outputs,
-                               kernel_size,
-                               stride=stride,
-                               padding=padding,
-                               dilation=dilation)
-        self.bn1 = nn.BatchNorm1d(n_outputs)
-        self.dropout1 = nn.Dropout(dropout)
-
-        # Second convolutional layer
-        self.conv2 = nn.Conv1d(n_outputs,
-                               n_outputs,
-                               kernel_size,
-                               stride=stride,
-                               padding=padding,
-                               dilation=dilation)
-        self.bn2 = nn.BatchNorm1d(n_outputs)
-        self.dropout2 = nn.Dropout(dropout)
-
-        # Sequential network of layers
-        self.net = nn.Sequential(self.conv1, self.bn1, nn.ReLU(),
-                                 self.dropout1, self.conv2, self.bn2,
-                                 nn.ReLU(), self.dropout2)
-        # Shortcut connection
-        self.downsample = nn.Conv1d(n_inputs, n_outputs,
-                                    1) if n_inputs != n_outputs else None
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        # Forward pass through the block
-        out = self.net(x)
-        res = x if self.downsample is None else self.downsample(x)
-        return self.relu(out + res)
-
-
-# --- Dilated CNN ---
+# --- FIXME: Dilated CNN ---
 class DilatedCNNBase(nn.Module):
 
     def __init__(self,
