@@ -104,101 +104,71 @@ class GRUBase(torch.nn.Module):
 
 
 ####################################################################################
-##################               RESNET 1D                      ####################
+##################               NEW MODELS                     ####################
 ####################################################################################
+# --- Resnet 1D ---
 class ResNet1DBase(nn.Module):
 
-    def __init__(self, num_blocks, num_classes=10):
+    def __init__(self, input_size, output_size, hidden_size=64):
         super(ResNet1DBase, self).__init__()
-        self.in_channels = 64
 
         # Initial convolutional layer
-        self.conv1 = nn.Conv1d(1, 64, kernel_size=7, stride=2, padding=3)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.pool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
+        self.conv1 = nn.Conv1d(1,
+                               hidden_size,
+                               kernel_size=7,
+                               stride=2,
+                               padding=3)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
 
-        # Residual layers
-        self.layer1 = self._make_layer(64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(512, num_blocks[3], stride=2)
+        # Residual block
+        self.conv2 = nn.Conv1d(hidden_size,
+                               hidden_size,
+                               kernel_size=3,
+                               stride=1,
+                               padding=1)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.conv3 = nn.Conv1d(hidden_size,
+                               hidden_size,
+                               kernel_size=3,
+                               stride=1,
+                               padding=1)
+        self.bn3 = nn.BatchNorm1d(hidden_size)
 
-        # Final linear layer for classification
-        self.linear = nn.Linear(512, num_classes)
-        print("Initialized ResNet1DBase model with {} parameters".format(
-            self.count_params()))
+        # Fully connected layer
+        self.linear = nn.Linear(hidden_size, output_size)
 
-    def _make_layer(self, out_channels, num_blocks, stride):
-        # Create a sequence of residual blocks
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(
-                self.ResidualBlock1D(self.in_channels, out_channels, stride))
-            self.in_channels = out_channels
-        return nn.Sequential(*layers)
-
-    class ResidualBlock1D(nn.Module):
-
-        def __init__(self, in_channels, out_channels, stride=1):
-            super(ResNet1DBase.ResidualBlock1D, self).__init__()
-            # Two convolutional layers with batch normalization
-            self.conv1 = nn.Conv1d(in_channels,
-                                   out_channels,
-                                   kernel_size=3,
-                                   stride=stride,
-                                   padding=1)
-            self.bn1 = nn.BatchNorm1d(out_channels)
-            self.conv2 = nn.Conv1d(out_channels,
-                                   out_channels,
-                                   kernel_size=3,
-                                   stride=1,
-                                   padding=1)
-            self.bn2 = nn.BatchNorm1d(out_channels)
-
-            # Shortcut connection to match dimensions
-            self.shortcut = nn.Sequential()
-            if stride != 1 or in_channels != out_channels:
-                self.shortcut = nn.Sequential(
-                    nn.Conv1d(in_channels,
-                              out_channels,
-                              kernel_size=1,
-                              stride=stride), nn.BatchNorm1d(out_channels))
-
-        def forward(self, x):
-            # Forward pass through the block
-            out = F.relu(self.bn1(self.conv1(x)))
-            out = self.bn2(self.conv2(out))
-            out += self.shortcut(x)
-            out = F.relu(out)
-            return out
+        print(
+            f"Initialized ResNet1DBase model with {self.count_params()} parameters"
+        )
 
     def count_params(self):
-        # Count the number of parameters in the model
         return sum(p.numel() for p in self.parameters())
 
     def forward(self, x):
-        # Forward pass through the network
+        # Reshape input: [batch_size, 1, input_size] (same as ConvBase)
+        x = x.view(x.size(0), 1, -1)
+
+        # Initial conv + batch norm + relu
         out = F.relu(self.bn1(self.conv1(x)))
-        out = self.pool(out)
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = F.adaptive_avg_pool1d(out, 1)
-        out = out.view(out.size(0), -1)
+
+        # Residual connection
+        identity = out
+        out = F.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+
+        # Add the skip connection (residual connection)
+        out += identity
+        out = F.relu(out)
+
+        # Global average pooling to reduce feature map to size of hidden_size
+        out = F.adaptive_avg_pool1d(out, 1).view(out.size(0), -1)
+
+        # Final linear layer
         out = self.linear(out)
         return out
 
 
-def ResNet18_1DBase(num_classes=10):
-    # Instantiate a ResNet1DBase with a specific configuration
-    return ResNet1DBase([2, 2, 2, 2], num_classes)
-
-
-####################################################################################
-##################               Temporal ConvNet               ####################
-####################################################################################
+# --- Temporal ConvNet ---
 class TCNBase(nn.Module):
 
     def __init__(self,
@@ -303,9 +273,7 @@ class TemporalBlock(nn.Module):
         return self.relu(out + res)
 
 
-####################################################################################
-##################               Dilated CNN                ####################
-####################################################################################
+# --- Dilated CNN ---
 class DilatedCNNBase(nn.Module):
 
     def __init__(self,
