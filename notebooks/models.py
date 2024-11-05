@@ -4,6 +4,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+
+import time, copy
+import numpy as np
+
+from mnist1d.utils import ObjectView
+
 
 
 class LinearBase(nn.Module):
@@ -168,80 +176,66 @@ class ResNet1DBase(nn.Module):
         return out
 
 
-# --- FIXME: Temporal ConvNet ---
+# --- Temporal ConvNet ---
 class TCNBase(nn.Module):
-
-    def __init__(self,
-                 input_size,
-                 output_size,
-                 num_channels,
-                 kernel_size=2,
-                 dropout=0.2):
+    def __init__(self, input_size, output_size, num_channels, dropout=0.2):
         super(TCNBase, self).__init__()
-        self.layers = nn.ModuleList()  # Store layers of the TCN
+
+        # Initial convolutional layer
+        self.initial_conv = nn.Conv1d(1, num_channels[0], kernel_size=7, stride=2, padding=3)
+        self.initial_bn = nn.BatchNorm1d(num_channels[0])
+
+        # Residual blocks for TCN
+        self.tcn_blocks = nn.ModuleList()
         num_levels = len(num_channels)
 
         for i in range(num_levels):
-            # Use input_size for the first layer, and num_channels for subsequent layers
-            in_channels = input_size if i == 0 else num_channels[i - 1]
+            in_channels = num_channels[i - 1] if i > 0 else num_channels[0]
             out_channels = num_channels[i]
-            dilation_size = 2**i
-            self.layers.append(
-                self._build_block(in_channels, out_channels, kernel_size,
-                                  dilation_size, dropout))
+            self.tcn_blocks.append(self._build_tcn_block(in_channels, out_channels, dropout))
 
-        # Linear layer for classification
+        # Fully connected layer for output
         self.linear = nn.Linear(num_channels[-1], output_size)
-        print(
-            f"Initialized TCNBase model with {self.count_params()} parameters")
 
-    def _build_block(self, in_channels, out_channels, kernel_size, dilation,
-                     dropout):
-        padding = (kernel_size - 1) * dilation
+        print(f"Initialized TCNBase model with {self.count_params()} parameters")
+
+    def _build_tcn_block(self, in_channels, out_channels, dropout):
         return nn.Sequential(
-            nn.Conv1d(in_channels,
-                      out_channels,
-                      kernel_size,
-                      stride=1,
-                      padding=padding,
-                      dilation=dilation),
+            nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Conv1d(out_channels,
-                      out_channels,
-                      kernel_size,
-                      stride=1,
-                      padding=padding,
-                      dilation=dilation),
+            nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1),
             nn.BatchNorm1d(out_channels),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            # Shortcut connection
-            nn.Conv1d(in_channels, out_channels, kernel_size=1)
-            if in_channels != out_channels else nn.Identity())
+            nn.Dropout(dropout)
+        )
 
     def count_params(self):
         return sum(p.numel() for p in self.parameters())
 
     def forward(self, x):
-        print(f"Input shape: {x.shape}")  # Debugging info to check input shape
-        # Assuming input shape is [batch_size, input_size, sequence_length]
-        for layer in self.layers:
-            out = layer(x)
-            x = out + x  # Residual connection
+        # Initial convolution + batch normalization + ReLU
+        x = x.view(x.size(0), 1, -1)  # Reshape input: [batch_size, 1, input_size]
+        out = F.relu(self.initial_bn(self.initial_conv(x)))
 
-        # Take the last time step's output
-        out = out[:, :, -1]
+        # Residual connections through the TCN blocks
+        for block in self.tcn_blocks:
+            identity = out
+            out = block(out)
+            if out.shape[1] != identity.shape[1]:
+                identity = nn.Conv1d(identity.shape[1], out.shape[1], kernel_size=1, stride=1, padding=0)(identity)
+            out += identity  # Add the residual connection
+            out = F.relu(out)
+
+        # Global average pooling to reduce the output to match the linear layer input
+        out = F.adaptive_avg_pool1d(out, 1).view(out.size(0), -1)
 
         # Final linear layer for classification
         out = self.linear(out)
-        print(f"Output shape: {out.shape}"
-              )  # Debugging info to check output shape
         return out
 
-
-# --- FIXME: Dilated CNN ---
+# --- Dilated CNN ---
 class DilatedCNNBase(nn.Module):
 
     def __init__(self,
@@ -251,6 +245,7 @@ class DilatedCNNBase(nn.Module):
                  kernel_size=3,
                  dilation=2):
         super(DilatedCNNBase, self).__init__()
+        
         # Define the dilated convolutional layers
         self.conv1 = nn.Conv1d(1,
                                channels,
