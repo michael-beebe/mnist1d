@@ -238,36 +238,20 @@ class TCNBase(nn.Module):
 # --- Dilated CNN ---
 class DilatedCNNBase(nn.Module):
 
-    def __init__(self,
-                 input_size,
-                 output_size,
-                 channels=64,
-                 kernel_size=3,
-                 dilation=2):
+    def __init__(self, input_size, output_size, channels=64, kernel_size=3, dilation=2):
         super(DilatedCNNBase, self).__init__()
         
         # Define the dilated convolutional layers
-        self.conv1 = nn.Conv1d(1,
-                               channels,
-                               kernel_size,
-                               dilation=dilation,
-                               padding=dilation)
-        self.conv2 = nn.Conv1d(channels,
-                               channels,
-                               kernel_size,
-                               dilation=dilation,
-                               padding=dilation)
-        self.conv3 = nn.Conv1d(channels,
-                               channels,
-                               kernel_size,
-                               dilation=dilation,
-                               padding=dilation)
-
+        self.conv1 = nn.Conv1d(1, channels, kernel_size, dilation=dilation, padding=dilation)
+        self.conv2 = nn.Conv1d(channels, channels, kernel_size, dilation=dilation, padding=dilation)
+        self.conv3 = nn.Conv1d(channels, channels, kernel_size, dilation=dilation, padding=dilation)
+        
+        # Adaptive pooling to ensure consistent output size for the linear layer
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        
         # Linear layer for classification
-        self.linear = nn.Linear(channels * (input_size // (dilation * 2)),
-                                output_size)
-        print("Initialized DilatedCNNBase model with {} parameters".format(
-            self.count_params()))
+        self.linear = nn.Linear(channels, output_size)
+        print("Initialized DilatedCNNBase model with {} parameters".format(self.count_params()))
 
     def count_params(self):
         # Count the number of parameters in the model
@@ -275,10 +259,13 @@ class DilatedCNNBase(nn.Module):
 
     def forward(self, x):
         # Forward pass through the dilated CNN
-        x = x.view(-1, 1,
-                   x.shape[-1])  # Reshape input to [batch, channels, length]
+        x = x.view(-1, 1, x.shape[-1])
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)  # Flatten the features
+        
+        # Apply global average pooling to reduce the sequence length to 1
+        x = self.global_pool(x).view(x.size(0), -1)
+        
         return self.linear(x)
+
